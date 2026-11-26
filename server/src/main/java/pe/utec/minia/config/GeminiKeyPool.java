@@ -40,9 +40,13 @@ public class GeminiKeyPool {
     private static final int LIMITE_POR_DIA = 10;
 
     public GeminiKeyPool(List<String> apiKeys, List<String> ttsModels, String llmModel) {
-        this.apiKeys = apiKeys == null ? List.of() : List.copyOf(apiKeys);
-        this.ttsModels = ttsModels == null ? List.of() : List.copyOf(ttsModels);
-        this.llmModel = llmModel;
+        this.apiKeys = apiKeys == null
+                ? List.of()
+                : apiKeys.stream().map(String::trim).filter(s -> !s.isBlank()).distinct().toList();
+        this.ttsModels = ttsModels == null
+                ? List.of()
+                : ttsModels.stream().map(String::trim).filter(s -> !s.isBlank()).distinct().toList();
+        this.llmModel = llmModel == null ? null : llmModel.trim();
         if (this.apiKeys.isEmpty()) {
             throw new IllegalStateException("Falta GEMINI_API_KEYS: configura al menos una API key de Gemini.");
         }

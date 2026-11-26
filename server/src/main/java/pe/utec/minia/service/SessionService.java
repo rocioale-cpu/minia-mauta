@@ -219,7 +219,7 @@ public class SessionService {
                     secuencia
             ));
         } catch (RuntimeException exception) {
-            log.warn("Fallo al evaluar con {}: {}", aiEngine.nombre(), exception.getMessage());
+            log.warn("Fallo al evaluar con {}", aiEngine.nombre(), exception);
             return new Evaluacion(Resultado.ERROR, 0, "", "",
                     "No pude evaluar tu respuesta. Vamos a intentarlo de nuevo.");
         }
