@@ -60,8 +60,8 @@ public class RotatingAiEngine implements AiEngine {
         if (configurado != null && !configurado.isBlank() && !configurado.contains("3.5")) {
             modelosCandidatos.add(configurado.trim());
         }
-        modelosCandidatos.add("gemini-3.8-flash");
-        modelosCandidatos.add("gemini-3.6-flash");
+        modelosCandidatos.add("gemini-2.5-flash");
+        modelosCandidatos.add("gemini-2.0-flash");
 
         for (int i = 0; i < Math.max(1, intentos); i++) {
             GeminiKeyPool.Combinacion combo = keyPool.siguienteDisponible();
