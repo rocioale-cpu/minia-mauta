@@ -28,6 +28,7 @@ public class GeminiKeyPool {
     // Estado por combinación (keyIndex, modelIndex)
     private final List<Slot> slots = new ArrayList<>();
     private final AtomicInteger cursor = new AtomicInteger(0);
+    private final AtomicInteger apiKeyCursor = new AtomicInteger(0);
 
     // Contadores globales por minuto y por día
     private volatile Instant minutoActual = Instant.now();
@@ -62,7 +63,7 @@ public class GeminiKeyPool {
             log.warn("GeminiKeyPool creado sin combinaciones (keys o modelos vacíos).");
         } else {
             log.info("GeminiKeyPool inicializado con {} combinaciones ({} keys x {} modelos).",
-                    slots.size(), apiKeys.size(), ttsModels.size());
+                    slots.size(), this.apiKeys.size(), this.ttsModels.size());
         }
     }
 
@@ -167,6 +168,22 @@ public class GeminiKeyPool {
 
     public String llmModel() {
         return llmModel;
+    }
+
+    /**
+     * Devuelve todas las API keys una sola vez, rotando la primera key entre llamadas.
+     * La evaluación LLM no debe usar las combinaciones key x modelo TTS.
+     */
+    public List<String> siguienteOrdenApiKeys() {
+        if (apiKeys.isEmpty()) {
+            return List.of();
+        }
+        int start = Math.floorMod(apiKeyCursor.getAndIncrement(), apiKeys.size());
+        List<String> orden = new ArrayList<>(apiKeys.size());
+        for (int i = 0; i < apiKeys.size(); i++) {
+            orden.add(apiKeys.get((start + i) % apiKeys.size()));
+        }
+        return List.copyOf(orden);
     }
 
     public List<String> apiKeys() {
