@@ -11,6 +11,7 @@ export type EstadoSesion =
 export type Resultado =
   | "CORRECTO"
   | "INCORRECTO"
+  | "PARCIAL"
   | "SIN_CONFIANZA"
   | "NINGUNO"
   | "ERROR";

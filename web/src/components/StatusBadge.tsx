@@ -9,6 +9,7 @@ const etiquetas: Record<string, string> = {
   ERROR: "Error",
   CORRECTO: "Correcto",
   INCORRECTO: "Incorrecto",
+  PARCIAL: "Parcial",
   NINGUNO: "Ninguno",
 };
 

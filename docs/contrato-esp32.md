@@ -225,8 +225,14 @@ CREADA → PREGUNTANDO → (PISTA | SIN_CONFIANZA | ERROR) → PREGUNTANDO
 | `FINALIZADA` | Terminaron las 5 preguntas o se cerró la sesión. |
 | `ERROR` | Fallo recuperable de IA/TTS; se puede reintentar. |
 
-Resultados de turno: `CORRECTO`, `INCORRECTO`, `SIN_CONFIANZA`, `NINGUNO`,
-`ERROR`.
+Resultados de turno: `CORRECTO`, `PARCIAL`, `INCORRECTO`, `SIN_CONFIANZA`,
+`NINGUNO`, `ERROR`. `PARCIAL` acierta solo una parte de la idea esperada y se trata
+igual que `INCORRECTO` (pista en el primer intento, respuesta correcta en el segundo).
+
+El firmware debe leer `estado`, `resultado`, `preguntaN` y `fin` del JSON del frame (o de los
+headers `X-Estado` / `X-Resultado` si habilita `collectHeaders`) y no llevar su propia
+cuenta de preguntas e intentos. `ERROR` y `SIN_CONFIANZA` no cuentan como respuesta.
+La creación de sesión y cada turno pueden tardar varios segundos: usar timeout HTTP ≥ 60 s.
 
 Regla pedagógica:
 

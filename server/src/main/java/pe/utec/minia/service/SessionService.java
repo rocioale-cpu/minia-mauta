@@ -92,18 +92,24 @@ public class SessionService {
         sesion.setIniciadaEn(Instant.now());
         sesionRepository.save(sesion);
 
-        // Generar y guardar el audio del texto de lectura para reproducción en la consola.
-        try {
-            byte[] audioTexto = ttsEngine.sintetizar(texto.getCuerpo());
-            Path dir = Path.of(System.getProperty("minia.cache.dir", "data/audio-cache"));
-            Files.createDirectories(dir);
-            Path file = dir.resolve("sesion-" + sesion.getId() + "-texto.pcm");
-            Files.write(file, audioTexto);
-            sesion.setAudioTextoRuta(file.toString());
-            sesionRepository.save(sesion);
-        } catch (Exception exception) {
-            log.warn("No se pudo generar el audio del texto para la sesion {}: {}", sesion.getId(), exception.getMessage());
-        }
+        // El audio del texto completo solo lo usa la consola web y tarda decenas de segundos:
+        // se genera en segundo plano para que el ESP32 reciba el saludo sin esperar.
+        Path dirTexto = Path.of(System.getProperty("minia.cache.dir", "data/audio-cache"));
+        Path archivoTexto = dirTexto.resolve("sesion-" + sesion.getId() + "-texto.pcm");
+        sesion.setAudioTextoRuta(archivoTexto.toString());
+        sesionRepository.save(sesion);
+        UUID sesionIdTexto = sesion.getId();
+        String cuerpoTexto = texto.getCuerpo();
+        CompletableFuture.runAsync(() -> {
+            try {
+                byte[] audioTexto = ttsEngine.sintetizar(cuerpoTexto);
+                Files.createDirectories(dirTexto);
+                Files.write(archivoTexto, audioTexto);
+            } catch (Exception exception) {
+                log.warn("No se pudo generar el audio del texto para la sesion {}: {}",
+                        sesionIdTexto, exception.getMessage());
+            }
+        });
 
         Pregunta pregunta = contentService.pregunta(preguntas.getFirst());
         String saludo = "Hola" + (alias == null || alias.isBlank() ? "" : ", " + alias)
@@ -195,7 +201,10 @@ public class SessionService {
                 respuesta.respuestaCorrecta()
         );
         TurnoResult result = new TurnoResult(meta, respuesta.audio());
-        responseCache.put(cacheKey, result);
+        // Un error de IA es transitorio: no se cachea para que un reintento con el mismo X-Turno se reevalúe.
+        if (evaluacion.resultado() != Resultado.ERROR) {
+            responseCache.put(cacheKey, result);
+        }
         return result;
     }
 
@@ -250,7 +259,7 @@ public class SessionService {
                 sesion.setIntentosActual(0);
                 return avanzar(sesion, texto, feedback, null);
             }
-            case INCORRECTO -> {
+            case INCORRECTO, PARCIAL -> {
                 if (intento == 1) {
                     sesion.setIntentosActual(1);
                     sesion.setEstado(EstadoSesion.PISTA);

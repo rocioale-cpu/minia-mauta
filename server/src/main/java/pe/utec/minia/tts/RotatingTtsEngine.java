@@ -13,11 +13,9 @@ import pe.utec.minia.config.MiniaProperties;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -59,6 +57,7 @@ public class RotatingTtsEngine implements TtsEngine {
                 }
                 throw exception;
             } catch (Exception exception) {
+                log.warn("TTS falló con keyIndex={} modelo={}", combo.keyIndex(), combo.model(), exception);
                 keyPool.marcarAgotada(combo.keyIndex(), combo.modelIndex());
             }
         }
@@ -86,12 +85,12 @@ public class RotatingTtsEngine implements TtsEngine {
                     .put("voiceName", properties.tts().gemini().voice());
 
             String payload = mapper.writeValueAsString(body);
-            String model = combo.model().contains("3.8") ? "gemini-2.5-flash-preview-tts" : combo.model();
+            // El modelo se usa tal como está configurado. Solo se usa la API de Gemini
+            // (generativelanguage); Vertex/aiplatform no está habilitado y daba 403.
+            String model = combo.model();
 
             List<String> urls = List.of(
-                    "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
-                    "https://aiplatform.googleapis.com/v1/publishers/google/models/" + model + ":generateContent?key="
-                            + URLEncoder.encode(combo.apiKey(), StandardCharsets.UTF_8)
+                    "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
             );
 
             HttpResponse<String> response = null;

@@ -10,6 +10,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
 
@@ -34,6 +35,13 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> handleBadRequest(Exception exception) {
         return ResponseEntity.badRequest()
                 .body(Map.of("codigo", "SOLICITUD_INVALIDA", "mensaje", "La solicitud no es válida."));
+    }
+
+    // Rutas inexistentes (/, /favicon.ico, bots): 404 sin stack trace ni ruido en los logs.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, String>> handleNotFound(NoResourceFoundException exception) {
+        return ResponseEntity.status(404)
+                .body(Map.of("codigo", "RUTA_NO_ENCONTRADA", "mensaje", "La ruta solicitada no existe."));
     }
 
     @ExceptionHandler(Exception.class)
