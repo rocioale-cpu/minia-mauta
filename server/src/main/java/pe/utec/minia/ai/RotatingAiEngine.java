@@ -14,10 +14,13 @@ import pe.utec.minia.domain.Resultado;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -47,139 +50,100 @@ public class RotatingAiEngine implements AiEngine {
         log.info(">>> [AUDIO RECIBIDO EN SERVIDOR] {} bytes ({} s) | rate={} Hz | intento={}",
                 audioBytes, String.format(Locale.ROOT, "%.2f", duracionSeg), request.rate(), request.intento());
 
-        List<String> apiKeys = keyPool.siguienteOrdenApiKeys();
-        if (apiKeys.isEmpty()) {
+        int intentos = keyPool.totalCombinaciones();
+        if (intentos == 0) {
             throw ApiException.serviceUnavailable("AI_SIN_KEYS", "No hay API keys configuradas para IA.");
         }
 
         Set<String> modelosCandidatos = new LinkedHashSet<>();
         String configurado = keyPool.llmModel();
-        if (configurado != null && !configurado.isBlank() && !configurado.contains("3.8")) {
+        if (configurado != null && !configurado.isBlank() && !configurado.contains("3.5")) {
             modelosCandidatos.add(configurado.trim());
         }
         modelosCandidatos.add("gemini-2.5-flash");
-        modelosCandidatos.add("gemini-2.5-flash-lite");
         modelosCandidatos.add("gemini-2.0-flash");
 
-        String payload;
-        try {
-            ObjectNode body = mapper.createObjectNode();
-            body.set("systemInstruction", systemInstruction());
-            body.set("contents", contents(request));
-
-            ObjectNode generationConfig = body.putObject("generationConfig");
-            generationConfig.put("temperature", 0.2);
-            generationConfig.put("responseMimeType", "application/json");
-            generationConfig.set("responseSchema", responseSchema());
-            payload = mapper.writeValueAsString(body);
-        } catch (IOException exception) {
-            log.warn("No se pudo preparar la solicitud a Gemini", exception);
-            throw ApiException.serviceUnavailable(
-                    "GEMINI_SOLICITUD_ERROR", "No se pudo preparar la solicitud a Gemini.");
-        }
-
-        int ultimoEstadoHttp = 0;
-        String ultimoModelo = null;
-        for (int keyIndex = 0; keyIndex < apiKeys.size(); keyIndex++) {
-            String apiKey = apiKeys.get(keyIndex);
-            for (String model : modelosCandidatos) {
-                String url = "https://generativelanguage.googleapis.com/v1beta/models/"
-                        + model + ":generateContent";
-                HttpResponse<String> response;
-                try {
-                    response = enviarConReintentos(url, apiKey, payload);
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                    throw ApiException.serviceUnavailable(
-                            "GEMINI_INTERRUMPIDO", "La evaluación fue interrumpida.");
-                } catch (IOException exception) {
-                    log.warn("Error de conexión/timeout con Gemini (modelo={}, keyIndex={})",
-                            model, keyIndex, exception);
-                    throw ApiException.serviceUnavailable(
-                            "GEMINI_CONEXION",
-                            "No se pudo conectar con Gemini (" + exception.getClass().getSimpleName() + ").");
+        for (int i = 0; i < Math.max(1, intentos); i++) {
+            GeminiKeyPool.Combinacion combo = keyPool.siguienteDisponible();
+            if (combo == null) {
+                break;
+            }
+            try {
+                String apiKey = combo.apiKey();
+                if (apiKey == null || apiKey.isBlank()) {
+                    throw ApiException.serviceUnavailable("GEMINI_SIN_API_KEY", "Falta configurar GEMINI_API_KEY.");
                 }
 
-                if (response.statusCode() == 200) {
-                    try {
-                        String text = extractText(mapper.readTree(response.body()));
-                        Evaluacion evaluacion = parseEvaluacion(text);
-                        log.info("Evaluación Gemini exitosa (modelo={}, keyIndex={})", model, keyIndex);
-                        return evaluacion;
-                    } catch (IOException exception) {
-                        log.warn("Gemini respondió con un formato que no se pudo interpretar (modelo={})",
-                                model, exception);
-                        throw ApiException.serviceUnavailable(
-                                "GEMINI_RESPUESTA_INVALIDA",
-                                "Gemini respondió, pero no se pudo interpretar su respuesta.");
+                ObjectNode body = mapper.createObjectNode();
+                body.set("systemInstruction", systemInstruction());
+                body.set("contents", contents(request));
+
+                ObjectNode generationConfig = body.putObject("generationConfig");
+                generationConfig.put("temperature", 0.2);
+                generationConfig.put("responseMimeType", "application/json");
+                generationConfig.set("responseSchema", responseSchema());
+
+                String payload = mapper.writeValueAsString(body);
+                HttpResponse<String> response = null;
+
+                for (String model : modelosCandidatos) {
+                    List<String> urls = new ArrayList<>();
+                    urls.add("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
+                    urls.add("https://aiplatform.googleapis.com/v1/publishers/google/models/" + model
+                            + ":generateContent?key=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8));
+
+                    for (String url : urls) {
+                        response = enviar(url, apiKey, payload);
+                        int reintentos = 0;
+                        while (response.statusCode() == 503 && reintentos < 2) {
+                            Thread.sleep(700L * (reintentos + 1));
+                            response = enviar(url, apiKey, payload);
+                            reintentos++;
+                        }
+                        if (response.statusCode() == 200) {
+                            String text = extractText(mapper.readTree(response.body()));
+                            log.info(">>> [EVALUACION GEMINI] {}", text);
+                            return parseEvaluacion(text);
+                        }
+                        log.warn("Eval fallo en {} ({}) -> HTTP {}: {}",
+                                model, url.split("\\?")[0], response.statusCode(), response.body());
                     }
                 }
 
-                ultimoEstadoHttp = response.statusCode();
-                ultimoModelo = model;
-                log.warn("Evaluación Gemini falló (modelo={}, keyIndex={}, HTTP={}): {}",
-                        model, keyIndex, response.statusCode(), resumirRespuesta(response.body()));
-
-                // Estas respuestas dependen de la API key, no del modelo.
-                if (response.statusCode() == 401 || response.statusCode() == 403) {
-                    break;
+                int code = response == null ? 500 : response.statusCode();
+                if (code == 429) {
+                    keyPool.marcarAgotada(combo.keyIndex(), combo.modelIndex());
+                    continue;
                 }
-                // Para 429 se prueba el siguiente modelo y luego la siguiente API key.
-            }
-        }
-
-        if (ultimoEstadoHttp != 0) {
-            throw ApiException.serviceUnavailable(
-                    "GEMINI_HTTP_ERROR",
-                    "Gemini respondió con HTTP " + ultimoEstadoHttp + " usando el modelo " + ultimoModelo + ".");
-        }
-        throw ApiException.serviceUnavailable("AI_SIN_KEYS", "No hay API keys configuradas para IA.");
-    }
-
-    private HttpResponse<String> enviarConReintentos(String url, String apiKey, String payload)
-            throws IOException, InterruptedException {
-        IOException ultimoError = null;
-        for (int intentoConexion = 0; intentoConexion < 2; intentoConexion++) {
-            try {
-                HttpResponse<String> response = enviar(url, apiKey, payload);
-                int reintentoServicio = 0;
-                while (response.statusCode() == 503 && reintentoServicio < 2) {
-                    Thread.sleep(700L * (reintentoServicio + 1));
-                    response = enviar(url, apiKey, payload);
-                    reintentoServicio++;
-                }
-                return response;
+                throw ApiException.serviceUnavailable("GEMINI_ERROR",
+                        "Gemini respondió con estado " + code + ".");
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw ApiException.serviceUnavailable("GEMINI_INTERRUMPIDO", "La evaluación fue interrumpida.");
             } catch (IOException exception) {
-                ultimoError = exception;
-                if (intentoConexion == 0) {
-                    Thread.sleep(500L);
+                throw ApiException.serviceUnavailable("GEMINI_ERROR", "No se pudo conectar con Gemini.");
+            } catch (ApiException exception) {
+                if (exception.getMessage() != null && exception.getMessage().contains("429")) {
+                    keyPool.marcarAgotada(combo.keyIndex(), combo.modelIndex());
+                    continue;
                 }
+                throw exception;
             }
         }
-        if (ultimoError != null) {
-            throw ultimoError;
-        }
-        throw new IOException("No se obtuvo respuesta de Gemini.");
+        throw ApiException.serviceUnavailable("AI_CUOTA_AGOTADA",
+                "Todas las API keys de IA están agotadas. Intenta más tarde.");
     }
 
     private HttpResponse<String> enviar(String url, String apiKey, String payload)
             throws IOException, InterruptedException {
-        int timeoutSeg = Math.min(15, Math.max(8, properties.ai().gemini().timeoutSeconds()));
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(timeoutSeg))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(properties.ai().gemini().timeoutSeconds()))
                 .header("Content-Type", "application/json")
-                .header("x-goog-api-key", apiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .build();
-        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    }
-
-    private String resumirRespuesta(String body) {
-        if (body == null || body.isBlank()) {
-            return "(sin detalle)";
+                .POST(HttpRequest.BodyPublishers.ofString(payload));
+        if (!url.contains("?key=")) {
+            builder.header("x-goog-api-key", apiKey);
         }
-        String compacto = body.replace('\r', ' ').replace('\n', ' ');
-        return compacto.length() <= 500 ? compacto : compacto.substring(0, 500) + "...";
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private ObjectNode systemInstruction() {
@@ -305,6 +269,6 @@ public class RotatingAiEngine implements AiEngine {
 
     @Override
     public String nombre() {
-        return "gemini-rotating:" + keyPool.apiKeys().size() + " keys";
+        return "gemini-rotating:" + keyPool.totalCombinaciones() + " combos";
     }
 }
